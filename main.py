@@ -11,25 +11,16 @@ import requests
 class State(TypedDict):
     texto: str
 
-# Funções dos nós adaptadas para o novo padrão
+# Função utilitária para chamada ao LLM Ollama
 
-def interpreta_pergunta(state: State) -> dict:
-    print("[InterpretaPergunta] Interpretando a pergunta...")
-    return {"texto": f"Pergunta interpretada: {state['texto']}"}
-
-def busca_contexto_filosofico(state: State) -> dict:
-    print("[BuscaContextoFilosofico] Buscando contexto filosófico...")
-    contexto = "Na obra 'O Guia do Mochileiro das Galáxias', 42 é a resposta para a pergunta fundamental da vida."
-    return {"texto": f"{state['texto']}\n{contexto}"}
-
-def elabora_resposta(state: State) -> dict:
-    print("[ElaboraResposta] Elaborando resposta final com LLM Ollama...")
-    prompt = f"{state['texto']}\nResponda de forma detalhada:"
+def consulta_llm(prompt: str, modelo: str = "llama3.2:1b", contexto: str = None) -> str:
+    if contexto:
+        prompt = f"{contexto}\n{prompt}"
     try:
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={
-                "model": "llama3.2:1b",  # Altere para o modelo disponível no seu Ollama
+                "model": modelo,
                 "prompt": prompt,
                 "stream": False
             },
@@ -37,18 +28,55 @@ def elabora_resposta(state: State) -> dict:
         )
         response.raise_for_status()
         data = response.json()
-        resposta_llm = data.get("response", "").strip()
+        return data.get("response", "").strip()
     except Exception as e:
-        resposta_llm = f"[Erro ao consultar o LLM Ollama: {e}]"
-    return {"texto": f"{state['texto']}\n{resposta_llm}"}
+        return f"[Erro ao consultar o LLM Ollama: {e}]"
+
+class AgenteBase:
+    def __init__(self, nome: str):
+        self.nome = nome
+    def log(self, mensagem: str):
+        print(f"[{self.nome}] {mensagem}")
+
+class InterpretaPerguntaAgente(AgenteBase):
+    def __init__(self):
+        super().__init__("InterpretaPergunta")
+    def process(self, state: State) -> dict:
+        self.log("Interpretando a pergunta com LLM Ollama...")
+        prompt = f"Interprete a seguinte pergunta:\n{state['texto']}"
+        interpretacao = consulta_llm(prompt)
+        return {"texto": f"Pergunta interpretada: {interpretacao}"}
+
+class BuscaContextoFilosoficoAgente(AgenteBase):
+    def __init__(self):
+        super().__init__("BuscaContextoFilosofico")
+    def process(self, state: State) -> dict:
+        self.log("Buscando contexto filosófico com LLM Ollama...")
+        prompt = "Forneça um contexto filosófico para a resposta."
+        contexto = consulta_llm(prompt, contexto=state['texto'])
+        return {"texto": f"{state['texto']}\n{contexto}"}
+
+class ElaboraRespostaAgente(AgenteBase):
+    def __init__(self):
+        super().__init__("ElaboraResposta")
+    def process(self, state: State) -> dict:
+        self.log("Elaborando resposta final com LLM Ollama...")
+        prompt = "Responda de forma detalhada:"
+        resposta_llm = consulta_llm(prompt, contexto=state['texto'])
+        return {"texto": f"{state['texto']}\n{resposta_llm}"}
 
 # Construção do grafo multiagente
 if __name__ == "__main__":
+    # Instanciando os agentes
+    interpreta_agente = InterpretaPerguntaAgente()
+    contexto_agente = BuscaContextoFilosoficoAgente()
+    elabora_agente = ElaboraRespostaAgente()
+
     # Criação do grafo de estado
     builder = StateGraph(State)
-    builder.add_node("interpreta", interpreta_pergunta)
-    builder.add_node("contexto", busca_contexto_filosofico)
-    builder.add_node("elabora", elabora_resposta)
+    builder.add_node("interpreta", interpreta_agente.process)
+    builder.add_node("contexto", contexto_agente.process)
+    builder.add_node("elabora", elabora_agente.process)
     builder.add_edge("interpreta", "contexto")
     builder.add_edge("contexto", "elabora")
     builder.set_entry_point("interpreta")
@@ -61,6 +89,6 @@ if __name__ == "__main__":
     print("\n[Resultado Final]\n", resultado["texto"])
 
 # Comentários explicativos:
-# - Cada nó é um agente com uma função específica.
-# - O grafo define a ordem de execução dos agentes.
-# - O fluxo pode ser expandido com mais agentes ou lógica condicional.
+# - Cada agente agora é uma classe com um método process.
+# - O grafo executa o método process de cada agente.
+# - Isso facilita a expansão e manutenção do sistema multiagente.
